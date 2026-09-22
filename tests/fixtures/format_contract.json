@@ -1,0 +1,90 @@
+{
+  "valid": [
+    {
+      "input": "2026.1",
+      "display": "2026.1.0",
+      "canonical": "2026.1.0-final",
+      "prerelease": false,
+      "dev_build": false
+    },
+    {
+      "input": "2026.1.0",
+      "display": "2026.1.0",
+      "canonical": "2026.1.0-final",
+      "prerelease": false,
+      "dev_build": false
+    },
+    {
+      "input": "2026.1.5-final",
+      "display": "2026.1.5",
+      "canonical": "2026.1.5-final",
+      "prerelease": false,
+      "dev_build": false
+    },
+    {
+      "input": "2026.2.5-beta",
+      "display": "2026.2.5-beta",
+      "canonical": "2026.2.5-beta",
+      "prerelease": true,
+      "dev_build": false
+    },
+    {
+      "input": "2026.3-rc",
+      "display": "2026.3.0-rc",
+      "canonical": "2026.3.0-rc",
+      "prerelease": true,
+      "dev_build": false
+    },
+    {
+      "input": "2026.4.0-dev",
+      "display": "2026.4.0-dev",
+      "canonical": "2026.4.0-dev",
+      "prerelease": true,
+      "dev_build": true
+    },
+    {
+      "input": "2026.11.0-a1b2c3d",
+      "display": "2026.11.0-a1b2c3d",
+      "canonical": "2026.11.0-a1b2c3d",
+      "prerelease": true,
+      "dev_build": true
+    },
+    {
+      "input": "9999.12.18446744073709551615",
+      "display": "9999.12.18446744073709551615",
+      "canonical": "9999.12.18446744073709551615-final",
+      "prerelease": false,
+      "dev_build": false
+    }
+  ],
+  "invalid": [
+    "",
+    "0000.1.0",
+    "26.1.0",
+    "20261.1.0",
+    "2026.01.0",
+    "2026.0.0",
+    "2026.13.0",
+    "2026.1.-1",
+    "2026.1.abc",
+    "2026.1.0-abc",
+    "2026.1.0-ABCDEF0",
+    "2026.1-abcdef0",
+    "2026.1.5-abcdef0",
+    "2026.1.0-preview",
+    "2026-1-0",
+    "2026.1.0-final-extra",
+    "2026.1.18446744073709551616"
+  ],
+  "comparisons": [
+    ["2025.12.0", "2026.1.0"],
+    ["2026.1.0-rc", "2026.1.0"],
+    ["2026.1.0", "2026.1.1"],
+    ["2026.1.0-abc1234", "2026.1.0-dev"],
+    ["2026.1.0-abc1234", "2026.1.0-def5678"],
+    ["2026.1.0-dev", "2026.1.0-alpha"],
+    ["2026.1.0-alpha", "2026.1.0-beta"],
+    ["2026.1.0-beta", "2026.1.0-rc"],
+    ["2026.1.0-rc", "2026.1.0-final"]
+  ]
+}

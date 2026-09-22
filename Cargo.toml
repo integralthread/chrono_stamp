@@ -1,0 +1,44 @@
+[package]
+name = "chrono_stamp"
+version = "2026.8.0-dev"
+edition = "2024"
+rust-version = "1.91"
+description = "Calendar-anchored versioning library and CLI"
+license = "MIT"
+publish = false
+readme = "README.md"
+repository = "https://github.com/integralthread/chrono_stamp"
+homepage = "https://github.com/integralthread/chrono_stamp"
+keywords = ["calendar", "cli", "release", "versioning"]
+categories = ["command-line-utilities", "development-tools"]
+
+[lib]
+name = "chrono_stamp"
+path = "src/lib.rs"
+
+[[bin]]
+name = "chrono"
+path = "src/main.rs"
+
+[dependencies]
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+time = { version = "0.3", features = ["formatting", "parsing"] }
+toml = "1"
+toml_edit = "0.23"
+usage = { package = "usage-rs", version = "=6.11.0", features = ["completions"] }
+
+[dev-dependencies]
+proptest = "1"
+tempfile = "3"
+usage = { package = "usage-rs", version = "=6.11.0", features = ["completions", "test"] }
+usage-parser = { package = "usage-lib", version = "=6.11.0" }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }

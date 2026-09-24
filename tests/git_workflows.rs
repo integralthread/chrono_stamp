@@ -203,3 +203,181 @@ fn push_failure_preserves_the_local_release_and_reports_recovery() {
     assert!(error.contains("recovery:"), "{error}");
     assert!(error.contains("safe locally"), "{error}");
 }
+
+fn json(output: &Output) -> serde_json::Value {
+    serde_json::from_slice(&output.stdout).expect("valid JSON")
+}
+
+fn check_at_tag(directory: &Path) -> Output {
+    run(&["--format", "json", "check", "--at-tag"], directory)
+}
+
+#[test]
+fn check_at_tag_prints_the_release_tag_at_head() {
+    let project = fixture();
+    assert!(run(&["tag"], project.path()).status.success());
+
+    let quiet = run(&["check", "--at-tag", "--quiet"], project.path());
+    assert!(
+        quiet.status.success(),
+        "{}",
+        String::from_utf8_lossy(&quiet.stderr)
+    );
+    assert_eq!(String::from_utf8(quiet.stdout).unwrap(), "v2026.8.0-rc\n");
+
+    let output = check_at_tag(project.path());
+    assert!(output.status.success());
+    let value = json(&output);
+    assert_eq!(value["schema_version"], 2);
+    assert_eq!(value["version"], "2026.8.0-rc");
+    assert_eq!(value["tag"], "v2026.8.0-rc");
+    assert_eq!(value["annotated"], true);
+    assert_eq!(value["hash"].as_str().unwrap().len(), 7);
+}
+
+#[test]
+fn check_at_tag_matches_normalized_lightweight_aliases() {
+    let project = fixture();
+    git(project.path(), &["tag", "v2026.8-rc"]);
+    let value = json(&check_at_tag(project.path()));
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["tag"], "v2026.8-rc");
+    assert_eq!(value["annotated"], false);
+}
+
+#[test]
+fn check_at_tag_explains_missing_tags() {
+    let project = fixture();
+    let output = check_at_tag(project.path());
+    assert_eq!(output.status.code(), Some(1));
+    let value = json(&output);
+    assert_eq!(value["error"]["code"], "head_untagged");
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("no tags found locally")
+    );
+
+    git(
+        project.path(),
+        &["commit", "--quiet", "--allow-empty", "-m", "unreleased"],
+    );
+    git(project.path(), &["tag", "v2026.7.0", "HEAD~1"]);
+    let value = json(&check_at_tag(project.path()));
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("chrono tag")
+    );
+
+    git(project.path(), &["tag", "v2026.8.0-rc"]);
+    git(
+        project.path(),
+        &["commit", "--quiet", "--allow-empty", "-m", "after release"],
+    );
+    let output = run(&["check", "--at-tag"], project.path());
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("has no v* tag"), "{stderr}");
+    assert!(stderr.contains("chrono release"), "{stderr}");
+}
+
+#[test]
+fn check_at_tag_rejects_extra_or_mismatched_tags() {
+    let project = fixture();
+    git(project.path(), &["tag", "v2026.8.0-rc"]);
+    git(project.path(), &["tag", "v2026.8.0-beta"]);
+    let value = json(&check_at_tag(project.path()));
+    assert_eq!(value["error"]["code"], "head_tag_mismatch");
+    assert_eq!(
+        value["error"]["message"],
+        "HEAD tags (v2026.8.0-rc,v2026.8.0-beta) do not match Cargo.toml version 2026.8.0-rc \
+         (expected only v2026.8.0-rc)"
+    );
+
+    let invalid = fixture();
+    git(invalid.path(), &["tag", "v2026.8.0-rc"]);
+    git(invalid.path(), &["tag", "vlegacy"]);
+    let value = json(&check_at_tag(invalid.path()));
+    assert_eq!(value["error"]["code"], "git_preflight_error");
+}
+
+#[test]
+fn check_at_tag_refuses_managed_files_that_differ_from_head() {
+    let project = fixture();
+    git(project.path(), &["tag", "v2026.8.0-rc"]);
+    fs::write(
+        project.path().join("Cargo.toml"),
+        "[package]\nname = \"fixture\"\nversion = \"2026.8.0-rc\"\n# edited\n",
+    )
+    .unwrap();
+    let value = json(&check_at_tag(project.path()));
+    assert_eq!(value["error"]["code"], "dirty_managed_paths");
+}
+
+#[test]
+fn check_at_tag_supports_mix_projects() {
+    let directory = TempDir::new().unwrap();
+    fs::write(
+        directory.path().join("mix.exs"),
+        "defmodule Decant.MixProject do\n  use Mix.Project\n\n  def project do\n    [app: :decant, version: \"2026.9.1\"]\n  end\nend\n",
+    )
+    .unwrap();
+    fs::write(
+        directory.path().join(".chrono.toml"),
+        "schema = 1\nversion_source = 'mix.exs' # single quotes\n",
+    )
+    .unwrap();
+    git(directory.path(), &["init", "--quiet"]);
+    git(directory.path(), &["config", "user.name", "Chrono Test"]);
+    git(
+        directory.path(),
+        &["config", "user.email", "chrono@example.invalid"],
+    );
+    git(directory.path(), &["add", "."]);
+    git(directory.path(), &["commit", "--quiet", "-m", "initial"]);
+    git(directory.path(), &["tag", "v2026.9.0"]);
+    git(directory.path(), &["tag", "v2026.9.1"]);
+
+    let value = json(&check_at_tag(directory.path()));
+    assert_eq!(
+        value["error"]["message"],
+        "HEAD tags (v2026.9.1,v2026.9.0) do not match mix.exs version 2026.9.1 \
+         (expected only v2026.9.1)"
+    );
+}
+
+#[test]
+fn check_prefix_requires_at_tag() {
+    let project = fixture();
+    let output = run(&["check", "--prefix", "chrono-v"], project.path());
+    assert_eq!(output.status.code(), Some(2));
+}
+
+#[test]
+fn status_lists_tags_at_head() {
+    let project = fixture();
+    git(project.path(), &["tag", "v2026.7.0"]);
+    git(
+        project.path(),
+        &["commit", "--quiet", "--allow-empty", "-m", "next"],
+    );
+    git(project.path(), &["tag", "v2026.8.0-rc"]);
+    git(project.path(), &["tag", "unrelated"]);
+    let output = run(
+        &["--format", "json", "status", "--date", "2026-08-27"],
+        project.path(),
+    );
+    assert!(output.status.success());
+    let value = json(&output);
+    let names = value["tags_at_head"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tag| tag["name"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["v2026.8.0-rc"]);
+    assert_eq!(value["tags_at_head"][0]["annotated"], false);
+}

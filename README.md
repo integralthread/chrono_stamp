@@ -46,10 +46,10 @@ For CI and scripts, use `--format json`. Successful and failed results carry `sc
 
 ## Commands
 
-- `status` (`version` alias): current source version, highest matching Git tag, commit, branch, dirty state, and next candidate.
+- `status` (`version` alias): current source version, highest matching Git tag, matching tags at HEAD, commit, branch, dirty state, and next candidate.
 - `parse VERSION` and `compare LEFT RIGHT`: validation, normalization, and ordering.
 - `dev`: print a UTC-month Git build; `--write` opts into file changes.
-- `check`, `history`: consistency and version-tag history.
+- `check`, `history`: consistency and version-tag history. `check --at-tag` also requires HEAD to carry exactly the release tag for the current version and prints that tag; failures use the JSON error codes `head_untagged`, `head_tag_mismatch`, and `dirty_managed_paths`. Fetch tags in CI checkouts first.
 - `init`, `bump`, `sync`: configuration and safe file updates.
 - `tag`, `release`: annotated/signed tags and the preflight-update-commit-tag-push workflow.
 - `completion SHELL`: Bash, Zsh, Fish, Elvish, Nushell, or PowerShell completion code.

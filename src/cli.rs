@@ -164,7 +164,14 @@ struct Dev {
 /// Verify that configured version files agree.
 #[derive(Args, Debug)]
 #[usage(effect = "read")]
-struct Check;
+struct Check {
+    /// Also require HEAD to carry exactly the release tag for the current version.
+    #[usage(long)]
+    at_tag: bool,
+    /// Override the configured tag prefix.
+    #[usage(long, requires = "at_tag")]
+    prefix: Option<String>,
+}
 
 /// Make configured secondary files match the primary source.
 #[derive(Args, Debug)]
@@ -470,6 +477,13 @@ fn require_valid_tag_catalog(catalog: &TagCatalog) -> Result<(), AppError> {
     Ok(())
 }
 
+fn tag_names(tags: &[VersionTag]) -> String {
+    tags.iter()
+        .map(|tag| tag.name.as_str())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 fn emit_human_warnings(context: &CliContext, warnings: &[AppWarning]) {
     if context.quiet || context.format == OutputFormat::Json {
         return;
@@ -654,6 +668,12 @@ impl RunWith<&CliContext> for Status {
             }
         };
         let highest_tag = catalog.tags.first();
+        let tags_at_head = if repository {
+            git.tags_at_head(&project.config.config.git.tag_prefix)?
+                .tags
+        } else {
+            Vec::new()
+        };
         let mut authoritative = vec![project.version.clone()];
         authoritative.extend(catalog.tags.iter().map(|tag| tag.version.clone()));
         let now = CliContext::month(self.date);
@@ -701,6 +721,7 @@ impl RunWith<&CliContext> for Status {
                     "version": project.version,
                     "canonical": project.version.canonical(),
                     "highest_tag": highest_tag,
+                    "tags_at_head": tags_at_head,
                     "next": next,
                     "git": {
                         "repository": repository,
@@ -718,6 +739,14 @@ impl RunWith<&CliContext> for Status {
             output::line(format_args!(
                 "highest tag: {}",
                 highest_tag.map_or("none", |tag| tag.name.as_str())
+            ))?;
+            output::line(format_args!(
+                "head tags: {}",
+                if tags_at_head.is_empty() {
+                    "none".to_owned()
+                } else {
+                    tag_names(&tags_at_head)
+                }
             ))?;
             output::line(format_args!(
                 "commit: {}",
@@ -877,6 +906,7 @@ impl RunWith<&CliContext> for Check {
     fn run_with(self, context: &CliContext) -> Self::Output {
         let project = context.load_project()?;
         let mut checked = Vec::new();
+        let mut managed = vec![project.source_path.clone()];
         for target in &project.config.config.updates {
             let path = project.config.resolve(&target.path)?;
             let values = read_target_versions(&project.root, &path, target)?;
@@ -890,24 +920,108 @@ impl RunWith<&CliContext> for Check {
                 }
             }
             checked.push(target.path.clone());
+            managed.push(path);
         }
+        if !self.at_tag {
+            if context.format == OutputFormat::Json {
+                emit_ok(
+                    &[],
+                    json!({
+                        "version": project.version,
+                        "checked": checked,
+                    }),
+                )?;
+            } else if !context.quiet {
+                output::line(format_args!(
+                    "{} is consistent across {} configured target(s)",
+                    project.version,
+                    checked.len()
+                ))?;
+            }
+            return Ok(());
+        }
+
+        let prefix = self
+            .prefix
+            .unwrap_or_else(|| project.config.config.git.tag_prefix.clone());
+        let (tag, hash) = require_release_tag_at_head(&project, &prefix, &managed)?;
         if context.format == OutputFormat::Json {
             emit_ok(
                 &[],
                 json!({
                     "version": project.version,
                     "checked": checked,
+                    "tag": tag.name,
+                    "hash": hash.as_str(),
+                    "annotated": tag.annotated,
                 }),
             )?;
-        } else if !context.quiet {
-            output::line(format_args!(
-                "{} is consistent across {} configured target(s)",
-                project.version,
-                checked.len()
-            ))?;
+        } else {
+            output::line(&tag.name)?;
         }
         Ok(())
     }
+}
+
+/// Confirms that HEAD is the commit released as the project's current version.
+fn require_release_tag_at_head(
+    project: &Project,
+    prefix: &str,
+    managed: &[PathBuf],
+) -> Result<(VersionTag, crate::GitHash), AppError> {
+    let git = Git::new(&project.root);
+    if !git.is_repository() {
+        return Err(AppError::NotGitRepository);
+    }
+    if project.version.git_hash().is_some() {
+        return Err(AppError::GitBuildTag(project.version.clone()));
+    }
+    let hash = git.hash(project.config.config.dev.hash_length)?;
+    let dirty = git.dirty_paths(managed)?;
+    if !dirty.is_empty() {
+        return Err(AppError::ManagedPathsDifferFromHead(dirty));
+    }
+    let at_head = git.tags_at_head(prefix)?;
+    require_valid_tag_catalog(&at_head)?;
+    let expected = format!("{prefix}{}", project.version);
+    if at_head.tags.is_empty() {
+        let hint = if !git.has_tags()? {
+            "no tags found locally; does the CI checkout fetch tags?".to_owned()
+        } else if let Some(existing) = git
+            .tags(prefix)?
+            .tags
+            .into_iter()
+            .find(|tag| tag.version == project.version)
+        {
+            format!(
+                "{} is already tagged {} on another commit; cut a release with: chrono release",
+                project.version, existing.name
+            )
+        } else {
+            format!(
+                "{} is not tagged yet; tag this commit with: chrono tag",
+                project.version
+            )
+        };
+        return Err(AppError::HeadUntagged {
+            hash: hash.to_string(),
+            prefix: prefix.to_owned(),
+            hint,
+        });
+    }
+    let mut tags = at_head.tags;
+    if tags.len() == 1 && tags[0].version == project.version {
+        return Ok((tags.remove(0), hash));
+    }
+    Err(AppError::HeadTagMismatch {
+        tags: tag_names(&tags),
+        source_file: project
+            .source_path
+            .file_name()
+            .map_or_else(String::new, |name| name.to_string_lossy().into_owned()),
+        version: project.version.clone(),
+        expected,
+    })
 }
 
 impl RunWith<&CliContext> for Sync {
@@ -1366,12 +1480,14 @@ impl Serialize for VersionTag {
             version: &'a ChronoStamp,
             created_at: &'a Option<String>,
             subject: &'a Option<String>,
+            annotated: bool,
         }
         Tag {
             name: &self.name,
             version: &self.version,
             created_at: &self.created_at,
             subject: &self.subject,
+            annotated: self.annotated,
         }
         .serialize(serializer)
     }
@@ -1440,6 +1556,23 @@ enum AppError {
         #[source]
         source: Box<dyn std::error::Error + Send + std::marker::Sync>,
     },
+    #[error("HEAD {hash} has no {prefix}* tag; {hint}")]
+    HeadUntagged {
+        hash: String,
+        prefix: String,
+        hint: String,
+    },
+    #[error(
+        "HEAD tags ({tags}) do not match {source_file} version {version} (expected only {expected})"
+    )]
+    HeadTagMismatch {
+        tags: String,
+        source_file: String,
+        version: ChronoStamp,
+        expected: String,
+    },
+    #[error("managed paths differ from HEAD, so the worktree is not the tagged release: {0:?}")]
+    ManagedPathsDifferFromHead(Vec<PathBuf>),
     #[error("version mismatch in {path}: expected {expected}, found {actual}")]
     VersionMismatch {
         path: PathBuf,
@@ -1482,6 +1615,9 @@ impl AppError {
             Self::Validation(_) => "invalid_version",
             Self::Update(_) | Self::CargoValidationRollback { .. } => "update_error",
             Self::VersionMismatch { .. } => "version_mismatch",
+            Self::HeadUntagged { .. } => "head_untagged",
+            Self::HeadTagMismatch { .. } => "head_tag_mismatch",
+            Self::ManagedPathsDifferFromHead(_) => "dirty_managed_paths",
         }
     }
 }

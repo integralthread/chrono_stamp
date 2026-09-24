@@ -16,6 +16,7 @@ pub struct VersionTag {
     pub version: ChronoStamp,
     pub created_at: Option<String>,
     pub subject: Option<String>,
+    pub annotated: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -93,15 +94,37 @@ impl Git {
     }
 
     pub fn tags(&self, prefix: &str) -> Result<TagCatalog, GitError> {
-        let output = self.output(&[
+        self.tag_catalog(prefix, &[])
+    }
+
+    /// Lists the configured-prefix tags that point at `HEAD`.
+    pub fn tags_at_head(&self, prefix: &str) -> Result<TagCatalog, GitError> {
+        self.tag_catalog(prefix, &["--points-at", "HEAD"])
+    }
+
+    pub fn has_tags(&self) -> Result<bool, GitError> {
+        Ok(!self
+            .output(&[
+                "for-each-ref",
+                "--count=1",
+                "--format=%(refname)",
+                "refs/tags",
+            ])?
+            .is_empty())
+    }
+
+    fn tag_catalog(&self, prefix: &str, filter: &[&str]) -> Result<TagCatalog, GitError> {
+        let mut args = vec![
             "for-each-ref",
-            "--format=%(refname:short)%09%(creatordate:iso-strict)%09%(contents:subject)",
-            "refs/tags",
-        ])?;
+            "--format=%(refname:short)%09%(objecttype)%09%(creatordate:iso-strict)%09%(contents:subject)",
+        ];
+        args.extend_from_slice(filter);
+        args.push("refs/tags");
+        let output = self.output(&args)?;
         let mut tags = Vec::new();
         let mut invalid = Vec::new();
         for line in output.lines() {
-            let mut fields = line.splitn(3, '\t');
+            let mut fields = line.splitn(4, '\t');
             let Some(name) = fields.next() else {
                 continue;
             };
@@ -110,6 +133,7 @@ impl Git {
             };
             match value.parse() {
                 Ok(version) => {
+                    let annotated = fields.next() == Some("tag");
                     let created_at = fields
                         .next()
                         .filter(|value| !value.is_empty())
@@ -123,6 +147,7 @@ impl Git {
                         version,
                         created_at,
                         subject,
+                        annotated,
                     });
                 }
                 Err(error) => invalid.push(InvalidVersionTag {
